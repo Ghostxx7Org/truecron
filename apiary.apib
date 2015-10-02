@@ -1,0 +1,1113 @@
+FORMAT: 1A
+HOST: https://www.truecron.com/api/v1
+
+# TrueCron API
+TrueCron is an *enterprise strength cloud based cron service*. 
+
+
+TrueCron provides a REST-style API with defined resources URIs, HTTP verbs and response codes. The API is accessible 
+via `https://www.truecron.com/api/v1`. HTTPS is the only supported transport.
+
+## API versions
+Current version is `v1` and it is encoded as a part of URI: https://www.truecron.com/api/v1. 
+This endpoint is guaranteed to be compatible with all `v1` clients. New endpoints will be introduced 
+(`v2`, `v3`, etc.) for breacking changes.
+
+## Data Encoding
+The API returns resources and collection of resources in JSON format, 
+with a ContentType `application/json` and UTF-8 encoding. 
+There are two ways to pass parameters to API:
+
+- For `GET` requests parameters are passed as part of a query string: `/api/v1/jobs?archived`.
+- For `POST`, `PUT` requests parameters are passed as JSON objects.
+
+    ```
+    POST /jobs
+    ContentType: `application/json` 
+
+    {
+        "job": {
+            "name": "My test job",
+            "active": false,
+            ...
+        }
+    }
+    ```
+    
+## Actions
+The API maps resource actions to HTTP verbs, when possible. 
+
+- `GET` - Return a resource of a resource collection.
+- `POST` - Create a new resource.
+- `PUT` - Replace a resource.
+- `PUT` - Update certain fields of the resource.
+- `DELETE` - Delete a resource.
+
+
+## Return codes and errors
+The API uses HTTP response codes to indicate success or failures. Generally, 2xx codes indicate success, 
+4xx - API errors, 5xx - server errors.
+
+Code | Description
+-----|-------------
+200  | Request succeeded
+201  | A resource was created, a typical response to a `POST` request
+204  | Request succeeded, no content returned, typical for `DELETE` requests
+400  | Invalid parameters
+401  | User is not authenticated
+403  | Access is denied
+404  | Resource not found
+5xx  | Server failure. The client should retry the request later.
+
+The API ignores unknown parameters. Invalid values result in the error code 400.
+
+For 4xx codes an error object may be returned with additional error details.
+
+    {
+        "error" : {
+            "message": "Human-readable error description"
+        }
+    }
+
+There could be an `errors` field with an array of detailed errors. These are used to report validation errors
+in specific fields.
+
+    {
+        "error" : {
+            "message": "Human-readable error description",
+            "errors": [
+                {
+                    "message": "Job name cannot be empty.",
+                    "type": "required",
+                    "field": "job_name"
+                },
+                {
+                    "message": "Cannot edit Last Run time.",
+                    "type": "invalid",
+                    "field": "last_run"
+                }
+            ]
+        }
+    }
+
+Possible values for the `type` field are `required` (a field value is required) and `invalid` 
+(invalid value, read-only field, non-unique value, etc.). New types can be added later, the client 
+should ignore unknown types.
+
+
+## Authentication
+TBD
+
+## Time handling
+All timestamps accepted or returned from the API must be in UTC in `YYYY-MM-DDTHH:MM:SSZ` format.
+
+## Partial results
+When you query a resource collection, in many cases the API returns "partial" objects, 
+i.e. with a subset of fields. The API excludes only the most expensive fields in terms of CPU and data size.
+To get a "full" object, follow the `self` link.
+
+## I18N
+The API returns human-readable strings, like error messages, change log messages, etc. 
+Use the `Accept-Language` HTTP header to specify your preferred language. 
+The API falls back to US English if the specified language is not supported.
+ 
+## Common collection parameters
+There are several common parameters that can be used with `GET` requests returning collections:
+
+Name     | Description                      | Details
+---------|----------------------------------|---------
+offset   | Number of objects to skip.       | number, optional, default: 0. Valid range: [1;maxint]
+limit    | Page size.                       | number, optional, default: 30. Valid range: [10;100]
+q        | Search query.                    | string, optional. Maximum length: 100.
+sort     | A field name to sort by.         | string, optional. Check API documentation for valid field names.
+direction| Sort direction: `asc` or `desc`. | string, optional. Valid values: `asc` or `desc`
+
+For example, `GET /users?offset=20&limit=10&q=ping&sort=updatedAt&direction=desc`.
+
+
+# Group Jobs
+The *Job* resource represents a unit-of-work that can be scheduled for execution.
+To make *TrueCron* execute anything, one needs to create a *Job* object, fill it 
+with *Tasks*, set the schedule and activate the *Job*.
+
+## Job [/jobs/{id}]
+A single *Job* object. The Job has the following fields:
+
+Name         | Type   |Description
+-------------|--------|---
+id           | string | Unique ID of the Job. Generated automaticaly when a job is created. Read-only, not null.
+name         | string | Job name. Cannot be empty.
+tags         | array  | A list of string tags attached to the job. Used for searching, grouping.
+active       | boolean| Gets or sets wheither the job is enabled, i.e. is scheduled for execution. Default: `false`.
+archived     | boolean| `true` for jobs moved to the archive, i.e. are not used anymore. Default: `false`.
+createdAt   | string | Creation timestamp (UTC). Read-only. Set automatically when a job is created.
+owner        | [User][]| An owner of the job. Set to the requestor when a job is created.
+updatedAt   | string | Modification timestamp (UTC). Read-only. Updated automatically when a job is modified.
+updatedBy   | [User][]| The last user updated the job. Read-only. Set automatically when a job is modified.
+starts_at    | string | A timestamp (UTC) when a job should run for the first time. See a note below.
+rrule        | string | A recurrence rule that defines times the job should run. See a note below.
+last_run     | [Result][]| An object with information about the last job execution. Read-only, nullable.
+next_run_at  | string | A timestamp (UTC) when a job is executing next time. Read-only, nullable.
+_links       | links  | The job provides links to self, a task collection, results collection.
+
+### Execution schedule
+Job execution schedule is defined by two fields: `starts_at` and `rrule`. 
+TrueCron uses a Recurrence Rule format as defined in iCalendar [RFC 2445](http://www.ietf.org/rfc/rfc2445.txt).
+(refer to section 4.3.10). The `starts_at` field plays the same role as the `DTSTART` field in iCalendar.
+
+### Execution result 
+The `last_run` field of the *Job* object provides information about last execution of the job.
+The embedded objects has only a subset of the fields: `started_at`, `status`, `elapsed_msec`. 
+To get a full object follow the `self` link.
+
+
++ Parameters
+    + id (string) ... ID of the *Job* object.
+    
++ Model (application/json)
+    
+    + Body
+    
+            {
+                "id": "1",
+                "name": "My first job", 
+                "tags": ["test", "tag1"],
+                "starts_at": "2014-08-21T10:00:11Z",
+                "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;BYHOUR=6;BYMINUTE=0;BYSECOND=0",
+                "active": true,
+                "archived": false,
+                "createdAt": "2014-08-21T10:00:11Z",
+                "owner": {
+                        "login": "alice@example.com",
+                        "id": "123",
+                        "name": "Alice",
+                        "avatar_url": "https://static.truecron.com/i/ASjdwfh3.png",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/123"
+                        }
+                    },
+                "updatedAt": "2014-08-21T11:20:34Z",            
+                "updatedBy": {
+                        "login": "bob@example.com",
+                        "id": "124",
+                        "name": "Bob",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/124"
+                        }
+                    },
+                "last_run": {
+                    "id": "865D765S654236457Fhjgjg",
+                    "started_at": "2014-08-25T06:00:00Z",
+                    "status": "succeeded",
+                    "elapsed_msec": 7000,
+                    "_links": {
+                        "self": "https://api/truecron.com/v1/job/1/results/865D765S654236457Fhjgjg"
+                    }
+                }
+                "next_run_at": "2014-09-01T06:00:00Z",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1",
+                    "tasks": "https://www.truecron.com/v1/jobs/1/tasks",
+                    "history": "https://www.truecron.com/v1/jobs/1/history",
+                    "results": "https://www.truecron.com/v1/jobs/1/results"
+                }
+            }
+
+
+### Retrieve a Job [GET]
++ Response 200
+    [Job][]
+
+### Update a Job [PUT]
++ Request (application/json)
+
+        {
+            "starts_at": "2015-01-01T00:00:00Z",
+            "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;BYHOUR=12;BYMINUTE=0;BYSECOND=0"
+        }
+
++ Response 200
+    [Job][]
+
+
+### Delete a Job [DELETE]
++ Response 204
+
+
+## Jobs Collection [/jobs{?archived,active,tags,offset,limit,q,sort,direction}]
+
+### Create a Job [POST]
+Only the `name` field is required to create a new *Job*.
++ Request (application/json)
+
+        {
+            "name": "My first job", 
+            "tags": ["edi", "production"],
+            "start_time": "2014-08-21T10:00:11Z",
+            "rrule": "FREQ=DAILY;INTERVAL=1;BYDAY=MO;BYHOUR=12;BYMINUTE=0;BYSECOND=0"
+        }
+
++ Response 201 (application/json)
+    [Job][]
+
+
+### List all Jobs visible to the authenticated user [GET]
++ Parameters
+    + archived = `false` (optional, boolean) ... Show archived jobs. 
+    + active = `true` (optional, boolean) ... Active filter of jobs collection. 
+    + tags (optional, string, `edi,production`) ... Tags filter of jobs collection. 
+    + offset = `0` (optional, number) ... Number of resources to skip. 
+    + limit = `30` (optional, number) ... Page size.
+    + q (optional, string, `American`) ... Search query.
+    + sort = `name` (optional, string, `updatedAt`) ... A field name to sort by.
+    + direction = `asc` (optional, string) ... Sort direction: `asc` or `desc`.
+
++ Response 200
+
+    + Headers
+    
+            Link: <https://www.truecron.com/v1/jobs?page=2>; rel="next", 
+                  <https://www.truecron.com/v1/jobs?page=4>; rel="last"
+
+    + Body
+    
+            [{
+                "id": "1",
+                "name": "My first job", 
+                "tags": ["production"],
+                "active": true,
+                "archived": false,
+                "updatedAt": "2014-08-21T11:20:34Z",            
+                "updatedBy": {
+                        "login": "bob@example.com",
+                        "id": "124",
+                        "name": "Bob",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/124"
+                        }
+                    },
+                "last_run": {
+                    "id": "865D765S654236457Fhjgjg",
+                    "started_at": "2014-08-25T06:00:00Z",
+                    "status": "succeeded",
+                    "elapsed_msec": 7000,
+                    "_links": {
+                        "self": "https://api/truecron.com/v1/jobs/1/results/865D765S654236457Fhjgjg"
+                    }
+                }
+                "next_run_at": "2014-09-01T06:00:00Z",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1"
+                }
+            }, 
+            [{
+                "id": "2",
+                "name": "My second job", 
+                "tags": [],
+                "active": true,
+                "archived": false,
+                "updatedAt": "2014-08-22T11:22:00Z",            
+                "updatedBy": {
+                        "login": "alice@example.com",
+                        "id": "123",
+                        "name": "Alice",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/123"
+                        }
+                    },
+                "last_run": {
+                    "id": "5346456534535345",
+                    "started_at": "2014-08-26T10:00:00Z",
+                    "status": "failed",
+                    "elapsed_msec": 3500,
+                    "_links": {
+                        "self": "https://api/truecron.com/v1/jobs/2/results/5346456534535345"
+                    }
+                }
+                "next_run_at": "2014-09-01T06:00:00Z",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/2"
+                }
+            }, 
+            }]
+
+
+
+# Group Tasks
+*Tasks* define execution steps of *Job* objects, like copy files, execute an application, ping a host, etc.
+
+## Task [/jobs/{job_id}/tasks/{id}]
+A *Task* object has the following fields:
+
+Name         | Type   |Description
+-------------|--------|---
+id           | string | Unique ID of the Task within a Job. Generated automaticaly when a task is created. Read-only, not null.
+name         | string | Name of the task. Required.
+active       | boolean| Gets or sets wheither the task is enabled. If disabled it will be skipped during execution. Default: `true`.
+position     | number | Position of the task in the list of job's task. Change position to reorder the tasks. If not specified, set to MAX(position within tasks)+1.
+type         | string | Type of the task. See *Task Types* section for a list of supported types. Required.
+settings     | object | Task-type specific settings.
+timeout_sec  | number | Abort task execution if it takes more than the value specified. Valid range: 1 to 86400 (one day). Default: 1800 (30 minutes).
+updatedAt   | string | Modification timestamp (UTC). Read-only. Updated automatically when an object is modified.
+updatedBy   | [User][]| The last user updated the job. Read-only. Set automatically when an object is modified.
+_links       | links  | Links to self and a parent job. Read-only.
+
++ Model  (application/json)
+    + Body
+    
+            {
+                "id": "1",
+                "name": "Ping mycompany.com",
+                "active": true,
+                "position": 1,
+                "type": "network_ping",
+                "settings": {
+                    "target": "mycompany.com",
+                    "connection": null,
+                    "count": 5,
+                    "ttl": null,
+                    "timeout": null,
+                    "size": null
+                },
+                "timeout_sec": "10",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1/tasks/1",
+                    "job": "https://www.truecron.com/v1/jobs/1"
+                }
+            }
+
+
++ Parameters
+    + job_id (required, string) ... ID of the *Job* object the task is a member of.
+    + id (required, string) ... ID of the *Task* object.
+
+### Retrieve a Task [GET]
++ Response 200
+    [Task][]
+
+### Modify a Task [PUT]
++ Request
+
+        {
+            "position": 1
+        }
+        
++ Response 200
+    [Task][]
+        
+
+### Replace a Task [PUT]
++ Request
+
+        {
+            "name": "Ping mycompany.com",
+            "active": true,
+            "position": 1,
+            "type": "network_ping",
+            "settings": {
+                "target": "mycompany.com",
+                "connection": null,
+                "count": 5,
+                "ttl": null,
+                "timeout": null,
+                "size": null
+            },
+            "timeout_sec": "10",
+            }
+        }
+
++ Response 200
+    [Task][]
+
+### Remove a Task [DELETE]
++ Response 204
+
+## Tasks Collection [/jobs/{job_id}/tasks]
+
++ Parameters
+    + job_id (required, string) ... ID of a *Job*.
+
+### List of Tasks [GET]
+
++ Response 200
+
+        [{
+            "id": "1",
+            "name": "Ping mycompany.com",
+            "active": true,
+            "position": 1,
+            "type": "network_ping",
+            "settings": {
+                "target": "mycompany.com",
+                "connection": null,
+                "count": 5,
+                "ttl": null,
+                "timeout": null,
+                "size": null
+            },
+            "timeout_sec": "10",
+            "_links": {
+                "self": "https://www.truecron.com/v1/jobs/1/tasks/1",
+                "job": "https://www.truecron.com/v1/jobs/1"
+            }
+        },
+        {
+            "id": "2",
+            "name": "Copy files to FTP",
+            "active": true,
+            "position": 2,
+            "type": "ftp_copy",
+            "settings": {
+                "source-connection": {
+                    "id": "999",
+                    "name": "Local",
+                    "_links": {
+                        "self": "https://www.truecron.com/v1/connections/999"
+                    }
+                },
+                "target_connection": {
+                    "id": "888",
+                    "name": "MyCompany sFTP",
+                    "_links": {
+                        "self": "https://www.truecron.com/v1/connections/888"
+                    }
+                },
+                "source_directory": "D:\data\export",
+                "target_directory": "",
+                "file-mask": "*.csv",
+                "overwrite": false
+            },
+            "timeout_sec": "600",
+            "_links": {
+                "self": "https://www.truecron.com/v1/jobs/1/tasks/2",
+                "job": "https://www.truecron.com/v1/jobs/1"
+            }
+        }]
+        
+### Create a Task [POST]
+Only `name` and `type` are required to create a new task. If `position` is not specified, 
+the task will be added to the end of the task lisk.
+
++ Request (application/json)
+
+        {
+            "name": "Ping mycompany.com",
+            "active": true,
+            "position": 1,
+            "type": "network_ping",
+            "settings": {
+                "target": "mycompany.com",
+                "connection": null,
+                "count": 5,
+                "ttl": null,
+                "timeout": null,
+                "size": null
+            },
+            "timeout_sec": "10",
+            }
+        }
+
++ Response 201 (application/json)
+
+        [Task][]
+
+
+
+
+
+# Group Result
+Job execution results.
+
+## Result [/jobs/{job_id}/results/{id}]
+Information about execution of the job.
+
+Name         | Type   |Description
+-------------|--------|-------
+id           | string | Execution ID. 
+started_at   | string | A timestamp (UTC) when a job was started. 
+status       | string | Status of execution: `succeeded`, `failed`, `in-progress`. 
+elapsed_msec | number | Duration of job execution in milliseconds. 
+message      | string | Error message. Nullable.
+tasks        | TaskResult | An array of task execution results
+_links       | links  | Provides links to self, the job.
+
++ Parameters
+    + id (string) ... ID of the *Result* object.
+    
++ Model (application/json)
+    
+    + Body
+    
+            {
+                "id": "10",
+                "started_at": "2015-0101T00:00:00Z",
+                "status": "failed",
+                "elapsed_msec": 7500,
+                "message": "Task 'Copy files to FTP' failed",
+                "tasks": [
+                    {
+                        "id": "1",
+                        "name": "Execute SQL",
+                        "type": "sql_execute",
+                        "elapsed_msec": 7000,
+                        "status": "succeeded",
+                        "message": "",
+                        "log_id": "84576656576235gdghasfd653",
+                        "_links": {
+                            "log": "https://api.truecron/v1/logs/84576656576235gdghasfd653"
+                        }
+                    },
+                    {
+                        "id": "2",
+                        "name": "Copy files to FTP",
+                        "type": "ftp_copy",
+                        "elapsed_msec": 500,
+                        "status": "failed",
+                        "message": "Cannot connect to FTP server ftp.example.com. Unknown host.",
+                        "log_id": "22232335555555544",
+                        "_links": {
+                            "log": "https://api.truecron/v1/logs/22232335555555544"
+                        }
+                    }
+                ]
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1/results/10"
+                }
+            }
+    
+### Retrieve a Result [GET]
++ Parameters
+    + job_id (string) ... ID of the *Job* object.
+    + id (string) ... ID of the *Result* object.
++ Response 200
+    [Result][]
+
+## Result Collection [/jobs/{job_id}/results{?offset,limit,q,sort,direction}]
++ Parameters
+    + job_id (required, string) ... ID of the *Job*.
+    + offset = `0` (optional, number) ... Number of resources to skip. 
+    + limit = `30` (optional, number) ... Page size.
+    + q (optional, string, `FTP`) ... Search query.
+    + sort = `started_at` (optional, string, `updatedAt`) ... A field name to sort by.
+    + direction = `desc` (optional, string) ... Sort direction: `asc` or `desc`.
+
+### Get recent results of the job [GET]
++ Response 200
+
+    + Headers
+    
+            Link: <https://www.truecron.com/v1/jobs/1/results?page=2>; rel="next", 
+                  <https://www.truecron.com/v1/jobs/1/results?page=10>; rel="last"
+
+    + Body
+    
+            [
+            {
+                "id": "10",
+                "started_at": "2015-01-01T00:00:00Z",
+                "status": "failed",
+                "elapsed_msec": 7500,
+                "message": "Task 'Copy files to FTP' failed",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1/results/10"
+                }
+            },
+            {
+                "id": "9",
+                "started_at": "2014-12-31T00:00:00Z",
+                "status": "succeeded",
+                "elapsed_msec": 10000,
+                "message": "",
+                "_links": {
+                    "self": "https://www.truecron.com/v1/jobs/1/results/9"
+                }
+            }
+            ]
+
+
+
+
+
+
+
+# Group History
+An audit journal of changes of resources or resource collections. 
+The journal is populated automatically when a user creates, modifies or deletes a resource:
+a job, a task, an organizaion, etc. 
+You can get an audit journal of the specific object or a collection by adding `/history` to the URL.
+A record has the following fields:
+
+Name         | Type    |Description
+-------------|---------|---
+id           | string  | Change ID. 
+createdAt    | string  | Change timestamp (UTC). 
+createdBy    | [User][]| A user who made the change.
+resourceUrl  | string  | An URL of the changed resource.
+operation    | string  | A string representing the operation performed (`updated`, `email-added`, etc).
+change       | string  | JSON object with changed attributes.
+oldValue     | string  | Old value of the resource in JSON format.
+
+
+## History Collection [/{+path}/history{?offset,limit,q,sort,direction}]
+
++ Parameters
+    + path (required, string) ... Path of the resource or resource collection to get history for.
+    + offset = `0` (optional, number) ... Resources to skip. 
+    + limit = `30` (optional, number) ... Page size.
+    + q (optional, string, `American`) ... Search query.
+    + sort = `at` (optional, string, `updatedAt`) ... A field name to sort by.
+    + direction = `desc` (optional, string) ... Sort direction: `asc` or `desc`.
+    
+### List journal entries [GET]
+
++ Response 200
+    + Body
+    
+
+            { "entries": [{
+                    "entry": {
+                        "id": "923",
+                        "createdAt": "2015-01-01T00:10:00Z",
+                        "resourceUrl": "/jobs/1",
+                        "createdBy": {
+                                "id": "123",
+                                "name": "Alice",
+                                "_links": {
+                                    "self": "/users/123"
+                                }
+                            }, 
+                        "operation": "updated",
+                        "change": { "count": 5 },
+                        "oldValue": {},
+                        "_links": {
+                            "self": "/history/923"
+                        }
+                    }
+                },
+                {
+                    "entry": {
+                        "id": "922",
+                        "createdAt": "2015-01-01T00:00:00Z",
+                        "resourceUrl": "/jobs/1",
+                        "createdBy": {
+                                "id": "123",
+                                "name": "Alice",
+                                "_links": {
+                                    "self": "/users/123"
+                                }
+                            }, 
+                        "operation": "created-task",
+                        "change": { "task": { "name": "task1" },
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/history/922"
+                        }
+                    }
+                }]
+            }    
+
+
+
+
+# Group User
+A *User* has the following fields:
+
+Name         | Type   |Description
+-------------|--------|---
+id           | string | Unique ID of the user. Generated automaticaly when an instance is created. Read-only, not null.
+name         | string | User name.
+password     | string | User password. Write-only.
+passwordHash | string | Hash of the password. 
+avatar_url   | string | Absolute URL to user's avatar.
+extensionData| object | Google authentication data.
+createdAt    | string | Creation timestamp (UTC). Read-only. 
+updatedAt    | string | Modification timestamp (UTC). Read-only. Updated automatically when the object is modified.
+updatedBy    | [User][]| The last user updated the object. Read-only. Set automatically when the object is modified.
+_links       | links  | Links to self, collections of organizations, and history.
+
+## User [/v1/users/{user_id}]
+
++ Parameters
+    + user_id (string) ... ID of the *User* object or an email address.
+    
++ Model (application/json)
+
+    + Body
+    
+            {
+                "user": 
+                {
+                    "id": "1",
+                    "name": "Alice",
+                    "passwordHash": "sdgjdslgkdjfglkdfjgdslfgjsdlgkdsfjgldfjg",
+                    "avatar_url": "https://static.truecron.com/i/ASjdwfh3.png",
+                    "createdAt": "2014-08-21T10:00:11Z",
+                    "updatedAt": "2014-08-21T11:20:34Z",            
+                    "updatedBy": {
+                            "id": "124",
+                            "name": "Bob",
+                            "_links": {
+                                "self": "/users/124"
+                            }
+                        },
+                    "_links": {
+                        "self": "/users/1",
+                        "organizations": "/users/1/organizations",
+                        "history": "/users/1/history",
+                        "emails": "/users/1/emails"
+                    }
+                }
+            }
+
+### Retrieve an user by ID [GET] 
++ Response 200
+    [User][]
+
+### Update the user [PUT] 
++ Request (application/json)
+
+        {
+            "name": "Alice",
+            "password": "P@ssw0rd"
+        }
+    
++ Response 200
+    [User][]
+
+### Delete the user [DELETE]
++ Response 204
+
+## Current authenticated user [/v1/user]
+The `/v1/user` URL is used to get or update current authenticated user.
+
+### Retrieve the authenticated user [GET] 
++ Response 200
+    [User][]
+
+### Update the authenticated user [PUT] 
++ Request (application/json)
+
+        {
+            "name": "Alice"
+        }
+    
++ Response 200
+    [User][]
+
+## Users Collection [/v1/users{?offset,limit,q,sort,direction}]
+
+### Create a new user [POST]
+`name` and `password` are required parameters.
+
++ Request (application/json)
+
+        {
+            "name": "Alice",
+            "password": "P@ssw0rd"
+        }
+
++ Response 201
+    [User][]
+
+    
+### List all users visible to the authenticated user [GET]
+
++ Parameters
+    + offset = `0` (optional, number) ... Number of resources to skip. 
+    + limit = `30` (optional, number) ... Page size.
+    + q (optional, string, `American`) ... Search query.
+    + sort = `login` (optional, string, `updatedAt`) ... A field name to sort by. 
+    + direction = `asc` (optional, string) ... Sort direction: `asc` or `desc`.
+
++ Response 200
+
+        {
+            "users": 
+            [
+                {
+                    "user" : {
+                        "id": "1",
+                        "name": "Alice", 
+                        "avatar_url": "https://static.truecron.com/i/ASjdwfh3.png",
+                        "extensionData": {},
+                        "createdAt": "2014-08-21T10:00:11Z",
+                        "updatedAt": "2014-08-21T11:20:34Z",            
+                        "updatedBy": {
+                                "id": "124",
+                                "name": "Bob",
+                                "_links": {
+                                    "self": "https://www.truecron.com/v1/users/124"
+                                }
+                            },
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/1",
+                            "organizations": "https://www.truecron.com/v1/users/1/organizations",
+                            "history": "https://www.truecron.com/v1/users/1/history",
+                            "emails": "https://www.truecron.com/v1/users/1/emails"
+                        }
+                    }
+                }
+            ],
+            "meta": {
+                "total": 1
+            }
+        }
+
+
+
+# Group Organization
+
+An *Organization* has the following fields:
+
+Name         | Type   |Description
+-------------|--------|---
+id           | string | Unique ID of the Job. Generated automaticaly when an instance is created. Read-only, not null.
+name         | string | Organization name. Cannot be empty.
+email        | string | Organization email.
+active_jobs  | number | Number of jobs (not archived) in all workspaces.
+total_jobs   | number | Number of jobs in all workspaces.
+total_workspaces|number| Number of workspaces. 
+total_connections|number| Number of connections to external systems. 
+plan         | object | Current subscription plan.
+createdAt   | string | Creation timestamp (UTC). Read-only. 
+owner        | [User][]| An owner of the organization. Initially set to the creator user.
+updatedAt   | string | Modification timestamp (UTC). Read-only. Updated automatically when the object is modified.
+updatedBy   | [User][]| The last user updated the object. Read-only. Set automatically when the object is modified.
+_links       | links  | Links to self, collections of workspaces, members, collections, and history.
+TODO: Add a currect plan information.
+
+## Organization [/v1/organizations/{org_id}]
+
++ Parameters
+    + org_id (string) ... ID of the *Organization* object.
+    
++ Model (application/json)
+
+    + Body
+    
+            {
+                "id": "1",
+                "name": "My Company", 
+                "email": "truecron-admin@mycompany.com",
+                "active_jobs": 5,
+                "total_jobs": 6,
+                "total_workspaces": 2,
+                "total_connections": 1,
+                "plan": "todo",
+                "createdAt": "2014-08-21T10:00:11Z",
+                "owner": {
+                        "login": "alice@example.com",
+                        "id": "123",
+                        "name": "Alice",
+                        "avatar_url": "https://static.truecron.com/i/ASjdwfh3.png",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/123"
+                        }
+                    },
+                "updatedAt": "2014-08-21T11:20:34Z",            
+                "updatedBy": {
+                        "login": "bob@example.com",
+                        "id": "124",
+                        "name": "Bob",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/124"
+                        }
+                    },
+                "_links": {
+                    "self": "https://www.truecron.com/v1/organizations/1",
+                    "members": "https://www.truecron.com/v1/organizations/1/members",
+                    "workspaces": "https://www.truecron.com/v1/organizations/1/workspaces",
+                    "connections": "https://www.truecron.com/v1/organizations/1/connections",
+                    "history": "https://www.truecron.com/v1/organizations/1/history",
+                }
+            }
+
+### Retrieve an organization by ID [GET] 
++ Response 200
+    [Organization][]
+
+### Update the organization [PUT] 
++ Request (application/json)
+
+        {
+            "email": "truecron-admin@mycompany.com"
+        }
+    
++ Response 200
+    [Organization][]
+
+### Remove the organization [DELETE]
++ Response 204
+
+    
+## Organizations Collection [/v1/organizations{?offset,limit,q,sort,direction}]
+
+### Create a new organization [POST]
+`name` is a required parameter.
+
++ Request (application/json)
+
+        {
+            "name": "My Company",
+            "email": "truecron-admin@mycompany.com",
+        }
+
++ Response 201 (application/json)
+    [Organization][]
+
+    
+### List all organizations authenticated user is a member of [GET]
+
++ Parameters
+    + offset = `0` (optional, number) ... Number of resources to skip. 
+    + limit = `30` (optional, number) ... Page size.
+    + q (optional, string, `American`) ... Search query.
+    + sort = `at` (optional, string, `updatedAt`) ... A field name to sort by.
+    + direction = `desc` (optional, string) ... Sort direction: `asc` or `desc`.
+
++ Response 200
+
+        [
+            {
+                "id": "1",
+                "name": "My Company", 
+                "email": "truecron-admin@mycompany.com",
+                "active_jobs": 5,
+                "total_jobs": 6,
+                "total_workspaces": 2,
+                "plan": "todo",
+                "createdAt": "2014-08-21T10:00:11Z",
+                "owner": {
+                        "login": "alice@example.com",
+                        "id": "123",
+                        "name": "Alice",
+                        "avatar_url": "https://static.truecron.com/i/ASjdwfh3.png",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/123"
+                        }
+                    },
+                "updatedAt": "2014-08-21T11:20:34Z",            
+                "updatedBy": {
+                        "login": "bob@example.com",
+                        "id": "124",
+                        "name": "Bob",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/124"
+                        }
+                    },
+                "_links": {
+                    "self": "https://www.truecron.com/v1/organizations/1",
+                    "members": "https://www.truecron.com/v1/organizations/1/members",
+                    "workspaces": "https://www.truecron.com/v1/organizations/1/workspaces",
+                    "connections": "https://www.truecron.com/v1/organizations/1/connections",
+                    "history": "https://www.truecron.com/v1/organizations/1/history",
+                }
+            }
+        ]
+
+
+
+
+
+#Group Organization Members
+Organization membership is the way to grant users permissions on ogranization's workspaces and jobs.
+The membership is a tripple of an organization, a user and a role. 
+The roles are `viewer`, `editor`, and `admin`.
+
+Name         | Type   |Description
+-------------|--------|---
+organization | object | [Organization][].
+user         | object | [User][].
+role         | string | Any of `viewer`, `editor`, or `admin`.
+updatedAt   | string | Modification timestamp (UTC). Read-only. Updated automatically when the object is modified.
+updatedBy   | object | The last user updated the object. Read-only. Set automatically when the object is modified.
+
+    
+## Organization Member [/v1/organizations/{org_id}/members/{user_id}] 
++ Parameters
+    + org_id (string, required) ... ID of the organization.
+    + user_id (string, required) ... ID of the user.
+
++ Model
+
+        {
+            "organization": {
+                "id": "1",
+                "name": "My Company", 
+                "_links": {
+                    "self": "https://www.truecron.com/v1/organizations/1"
+                }
+            },
+            "user": {
+                    "login": "bob@example.com",
+                    "id": "124",
+                    "name": "Bob",
+                    "_links": {
+                        "self": "https://www.truecron.com/v1/users/124"
+                    }
+                },
+            "role": "editor"
+            "_links": {
+                "self": "https://www.truecron.com/v1/organizations/1/members/124"
+            }
+        }
+
+### Change role of the member [PUT]
++ Request (application/json)
+
+        {
+            "role": "editor"
+        }
+    
++ Response 200
+
+        [Organization Member][]
+        
+### Remove a member from the organization [DELETE]
++ Response 204 
+
+## Organization Members [/v1/organizations/{org_id}/members{?offset,limit,q,sort,direction}] 
+
+### List all members of the organization [GET]
+
++ Response 200
+
+        [
+            {
+                "organization": {
+                    "id": "1",
+                    "name": "My Company", 
+                    "_links": {
+                        "self": "https://www.truecron.com/v1/organizations/1"
+                    }
+                },
+                "user": {
+                        "login": "bob@example.com",
+                        "id": "124",
+                        "name": "Bob",
+                        "_links": {
+                            "self": "https://www.truecron.com/v1/users/124"
+                        }
+                    },
+                "role": "editor"
+                "_links": {
+                    "self": "https://www.truecron.com/v1/organizations/1/members/124"
+                }
+            }
+        ]   
+
+### Add a new member [POST]
+To add a new member you need to specify ID of the user and the role.
+
++ Request (application/json)
+
+        {
+            "user_id": "124",
+            "role": "editor"
+        }
+        
++ Response 201 (application/json)
+
+    [Organization Member][]
+    
+
+
